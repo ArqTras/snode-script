@@ -1,0 +1,41 @@
+# Katalogi generowane przez skrypt
+generated_services/
+generated_services-backup-*.tar.gz
+
+# Pliki backup
+*.backup
+*.bak
+*~
+
+# Pliki informacyjne generowane przez skrypt
+ARQMA-setup.info
+
+# Logi
+*.log
+
+# Pliki tymczasowe
+*.tmp
+*.temp
+/tmp/
+
+# System
+.DS_Store
+Thumbs.db
+
+# Editor
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Dane testowe
+test_data/
+*.test
+
+# Klucze i certyfikaty (nigdy nie commitować!)
+*.key
+*.pem
+key
+key_ed25519
+cert.pem
