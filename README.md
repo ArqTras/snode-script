@@ -37,6 +37,10 @@ This bash script offers a complete solution for managing Arqma nodes:
 
 - Port configuration detection from existing services
 - Automatic installation of required dependencies
+- Automatic download of binaries from GitHub releases:
+  - **arqmad** and **arqma-blockchain-import** from [arqma/arqma](https://github.com/arqma/arqma/releases)
+  - **arqma-storage** from [arqma/arqma-storage-server](https://github.com/arqma/arqma-storage-server/releases) (v1.1.0)
+  - Auto-detects Ubuntu version (22.04/24.04) for compatible storage server binary
 - Generation of systemd service files
 - System resource control (CPU, RAM)
 - Configuration backup before changes
@@ -45,9 +49,11 @@ This bash script offers a complete solution for managing Arqma nodes:
 
 - **Operating system**: Ubuntu/Debian (apt)
 - **Architecture**: x86_64
+- **Supported Ubuntu versions**: 22.04 LTS, 24.04 LTS (auto-detected)
 - **Minimum**: 2 CPU cores + 4GB RAM (for 1 node pair)
 - **Permissions**: root (sudo)
 - **Systemd**: required for service management
+- **Internet**: required for downloading binaries from GitHub
 
 ### Recommended Resources
 

@@ -35,6 +35,10 @@ ARQMAD_BIN="/usr/local/bin/arqmad"
 ARQSTORAGE_BIN="/usr/local/bin/arqma-storage"
 ARQIMPORT_BIN="/usr/local/bin/arqma-blockchain-import"
 
+# Storage Server GitHub release
+STORAGE_SERVER_VERSION="v1.1.0"
+STORAGE_SERVER_BASE_URL="https://github.com/arqma/arqma-storage-server/releases/download/${STORAGE_SERVER_VERSION}"
+
 BASE_PORT_DEFAULT=10001
 P2P_OFFSET=0
 RPC_OFFSET=1
@@ -279,6 +283,79 @@ check_space_for_seeds() {
 }
 
 # ---------------- Install helpers ----------------
+
+detect_ubuntu_version() {
+    if [[ -f /etc/os-release ]]; then
+        # shellcheck disable=SC1091
+        . /etc/os-release
+        if [[ "$ID" == "ubuntu" ]]; then
+            echo "$VERSION_ID"
+            return 0
+        fi
+    fi
+    echo "unknown"
+    return 1
+}
+
+install_storage_server() {
+    local storage_bin="$1"
+    
+    echo "Installing arqma-storage from GitHub releases..."
+    
+    local ubuntu_version
+    ubuntu_version=$(detect_ubuntu_version)
+    
+    local storage_archive
+    case "$ubuntu_version" in
+        "24.04")
+            storage_archive="arqma-storage-linux-ubuntu-24.04-x86_64.tar.gz"
+            ;;
+        "22.04")
+            storage_archive="arqma-storage-linux-ubuntu-22.04-x86_64.tar.gz"
+            ;;
+        *)
+            echo "WARNING: Ubuntu version $ubuntu_version not explicitly supported"
+            echo "Defaulting to Ubuntu 22.04 build (may work on other versions)"
+            storage_archive="arqma-storage-linux-ubuntu-22.04-x86_64.tar.gz"
+            ;;
+    esac
+    
+    local storage_url="${STORAGE_SERVER_BASE_URL}/${storage_archive}"
+    echo "Downloading: $storage_url"
+    
+    local temp_dir
+    temp_dir=$(mktemp -d)
+    cd "$temp_dir" || die "Cannot cd to temp dir"
+    
+    if download_file "$storage_url" "$storage_archive"; then
+        tar -xzf "$storage_archive"
+        
+        # Find arqma-storage binary
+        local storage_file
+        storage_file=$(find . -name "arqma-storage" -type f | head -n1)
+        
+        if [[ -n "$storage_file" && -f "$storage_file" ]]; then
+            cp "$storage_file" "$storage_bin"
+            chown root:root "$storage_bin" 2>/dev/null || true
+            chmod 0755 "$storage_bin"
+            echo "arqma-storage installed successfully"
+        else
+            echo "ERROR: arqma-storage binary not found in archive"
+            cd - >/dev/null 2>&1 || true
+            rm -rf -- "$temp_dir"
+            return 1
+        fi
+    else
+        echo "ERROR: Failed to download arqma-storage"
+        cd - >/dev/null 2>&1 || true
+        rm -rf -- "$temp_dir"
+        return 1
+    fi
+    
+    cd - >/dev/null 2>&1 || true
+    rm -rf -- "$temp_dir"
+    return 0
+}
 
 install_from_endpoint() {
     local endpoint="$1"
@@ -1062,6 +1139,12 @@ if [[ -n "${MY_ENDPOINT:-}" ]]; then
     install_from_endpoint "$MY_ENDPOINT"
 else
     install_from_github "$GITHUB_RELEASE" "$ARQMAD_BIN" "$ARQIMPORT_BIN"
+fi
+
+# Install storage server separately
+if ! install_storage_server "$ARQSTORAGE_BIN"; then
+    echo "WARNING: Failed to install arqma-storage"
+    echo "Storage nodes will not be able to start"
 fi
 
 if [[ -f "$ARQMAD_BIN" ]]; then chown root:root "$ARQMAD_BIN" 2>/dev/null || true; chmod 0755 "$ARQMAD_BIN" || true; fi
