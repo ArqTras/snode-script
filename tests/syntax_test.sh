@@ -86,7 +86,9 @@ REQUIRED_FUNCTIONS=(
     "report_existing"
     "run_add_mode"
     "ensure_users_and_dirs"
-    "generate_service_files_for_range"
+    "generate_services_for_new_batch"
+    "run_update_mode"
+    "run_dashboard"
 )
 
 MISSING=()
