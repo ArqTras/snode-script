@@ -136,6 +136,7 @@ show_help() {
     echo "  --report-existing      Report existing sn*/st* ports and dirs; exit"
     echo "  --add-pairs N          Add N new pairs after existing ones"
     echo "  --update-binaries      Update binaries (GitHub default; endpoint override), rolling restart gate on sn1/st1"
+    echo "  --register N           Register service node N (checks sync, storage ping, generates registration command)"
     echo ""
     echo "Options:"
     echo "  --base-data-dir PATH        Base data dir (default: ${BASE_DATA_DIR_DEFAULT})"
@@ -151,6 +152,9 @@ show_help() {
     echo "  --info-file PATH            Setup info file path (default: ${INFO_FILE_DEFAULT})"
     echo "  --output-dir PATH           Generated services dir (default: ${OUTPUT_DIR_DEFAULT})"
     echo "  --backup-dir PATH           Backup dir (default: /root/arqma-backups)"
+    echo ""
+    echo "Registration mode flags:"
+    echo "  --wallet ADDRESS            Wallet address for registration (optional, will prompt if not provided)"
     echo ""
     echo "Update mode flags:"
     echo "  --restart-timeout SEC       Timeout waiting for unit to become active (default: ${RESTART_TIMEOUT_DEFAULT})"
@@ -832,6 +836,7 @@ run_dashboard() {
     echo "Shortcuts:"
     echo "  add pairs: $0 --add-pairs 2 --seed-from 1"
     echo "  update bins: $0 --update-binaries --rpc-healthcheck --rollback-on-fail"
+    echo "  register node: $0 --register 1 --wallet arYOUR_WALLET_ADDRESS"
     echo "  report: $0 --report-existing"
 }
 
@@ -883,6 +888,273 @@ backup_keys_and_certs() {
       \( -name 'pub' -o -name 'key*' -o -name 'cert.pem' -o -name 'key.pem' \) -print0 2>/dev/null \
       | tar --null -czf "$out" --files-from=- 2>/dev/null || true
     echo "$out"
+}
+
+# ---------------- Service Node Registration ----------------
+
+rpc_call() {
+    local rpc_port="$1"
+    local method="$2"
+    local params="${3:-{}}"
+    
+    need_cmd curl || return 1
+    need_cmd jq || return 1
+    
+    local result
+    result=$(curl -s "http://127.0.0.1:${rpc_port}/json_rpc" \
+        -d "{\"jsonrpc\":\"2.0\",\"id\":\"0\",\"method\":\"${method}\",\"params\":${params}}" \
+        -H 'Content-Type: application/json' 2>/dev/null || echo "")
+    
+    echo "$result"
+}
+
+check_sn_synced() {
+    local unit="$1"
+    local exec rpc_port result
+    
+    exec=$(get_execstart_line "$unit")
+    rpc_port=$(awk 'match($0, /--rpc-bind-port[[:space:]]+([0-9]+)/, a){print a[1]}' <<<"$exec")
+    
+    [[ -n "$rpc_port" ]] || return 1
+    
+    result=$(rpc_call "$rpc_port" "get_info" "{}")
+    [[ -z "$result" ]] && return 1
+    
+    local height=$(echo "$result" | jq -r '.result.height' 2>/dev/null || echo "0")
+    local target_height=$(echo "$result" | jq -r '.result.target_height' 2>/dev/null || echo "0")
+    
+    [[ "$height" -eq 0 ]] && return 1
+    [[ "$target_height" -eq 0 ]] && return 1
+    
+    # Consider synced if within 10 blocks of target
+    local diff=$((target_height - height))
+    [[ $diff -lt 0 ]] && diff=$((-diff))
+    
+    if [[ $diff -le 10 ]]; then
+        echo "$height"
+        return 0
+    fi
+    
+    return 1
+}
+
+check_storage_ping() {
+    local sn_unit="$1"
+    local st_unit="$2"
+    local lookback_lines="${3:-200}"
+    
+    # Check if storage service exists and is active
+    if ! systemctl cat "$st_unit" >/dev/null 2>&1; then
+        echo "Storage service $st_unit not found"
+        return 1
+    fi
+    
+    if ! systemctl is-active --quiet "$st_unit"; then
+        echo "Storage service $st_unit is not active"
+        return 1
+    fi
+    
+    # Check SN logs for storage server registration/ping
+    local sn_logs
+    sn_logs=$(journalctl -u "$sn_unit" -n "$lookback_lines" --no-pager 2>/dev/null || echo "")
+    
+    if echo "$sn_logs" | grep -q "storage.*server.*registered\|Received.*ping.*storage"; then
+        return 0
+    fi
+    
+    # Check ST logs for successful connection
+    local st_logs
+    st_logs=$(journalctl -u "$st_unit" -n "$lookback_lines" --no-pager 2>/dev/null || echo "")
+    
+    if echo "$st_logs" | grep -q "Successfully.*registered\|Connection.*established\|Ping.*successful"; then
+        return 0
+    fi
+    
+    return 1
+}
+
+generate_registration_command() {
+    local unit="$1"
+    local wallet_address="$2"
+    local output_file="$3"
+    
+    local exec rpc_port result
+    
+    exec=$(get_execstart_line "$unit")
+    rpc_port=$(awk 'match($0, /--rpc-bind-port[[:space:]]+([0-9]+)/, a){print a[1]}' <<<"$exec")
+    
+    [[ -n "$rpc_port" ]] || { echo "ERROR: Cannot extract RPC port from $unit"; return 1; }
+    
+    echo "Calling prepare_registration on RPC port ${rpc_port}..."
+    echo "Wallet address: ${wallet_address}"
+    echo ""
+    
+    result=$(rpc_call "$rpc_port" "prepare_registration" "{\"operator_cut\":\"0\",\"contributions\":[{\"address\":\"${wallet_address}\",\"amount\":20000000000000}],\"staking_requirement\":20000000000000}")
+    
+    if [[ -z "$result" ]] || echo "$result" | jq -e '.error' >/dev/null 2>&1; then
+        echo "ERROR: prepare_registration failed"
+        echo "$result" | jq '.' 2>/dev/null || echo "$result"
+        return 1
+    fi
+    
+    local registration_cmd
+    registration_cmd=$(echo "$result" | jq -r '.result.registration_cmd' 2>/dev/null || echo "")
+    
+    if [[ -z "$registration_cmd" || "$registration_cmd" == "null" ]]; then
+        echo "ERROR: No registration_cmd in response"
+        echo "$result" | jq '.' 2>/dev/null || echo "$result"
+        return 1
+    fi
+    
+    # Save to file
+    cat > "$output_file" <<EOF
+# Service Node Registration Command
+# Generated: $(date)
+# Unit: $unit
+# Wallet: $wallet_address
+# 
+# INSTRUCTIONS:
+# 1. Copy the command below (the entire 'register_service_node' line)
+# 2. Open your Arqma wallet CLI
+# 3. Paste and execute the command
+# 4. Wait for transaction confirmation
+# 
+# Registration command:
+
+$registration_cmd
+
+# 
+# After registration, you can check status with:
+#   curl -s http://127.0.0.1:${rpc_port}/json_rpc -d '{"jsonrpc":"2.0","id":"0","method":"get_service_node_key"}' -H 'Content-Type: application/json' | jq
+# 
+EOF
+    
+    echo ""
+    echo "======================================"
+    echo "Registration command generated!"
+    echo "======================================"
+    echo ""
+    echo "Saved to: $output_file"
+    echo ""
+    echo "NEXT STEPS:"
+    echo "1. Open the file: cat $output_file"
+    echo "2. Copy the 'register_service_node' command"
+    echo "3. Open your Arqma wallet CLI"
+    echo "4. Paste and execute the command"
+    echo "5. Wait for transaction confirmation"
+    echo ""
+    echo "Registration command preview:"
+    echo "---"
+    echo "$registration_cmd"
+    echo "---"
+    echo ""
+    
+    return 0
+}
+
+run_register_mode() {
+    local node_num="$1"
+    local wallet_address="$2"
+    
+    [[ "$node_num" =~ ^[0-9]+$ ]] || die "--register requires node number (integer)"
+    [[ "$node_num" -ge 1 ]] || die "--register node number must be >= 1"
+    
+    local sn_unit="sn${node_num}.service"
+    local st_unit="st${node_num}.service"
+    
+    # Check if service exists
+    if ! systemctl cat "$sn_unit" >/dev/null 2>&1; then
+        die "Service $sn_unit not found"
+    fi
+    
+    echo "==================================="
+    echo "Service Node Registration: sn${node_num}"
+    echo "==================================="
+    echo ""
+    
+    # Check dependencies
+    if ! need_cmd curl || ! need_cmd jq; then
+        echo "Installing required dependencies (curl, jq)..."
+        ensure_packages curl jq
+    fi
+    
+    # Check if service is active
+    echo "[1/4] Checking service status..."
+    if ! systemctl is-active --quiet "$sn_unit"; then
+        die "Service $sn_unit is not active. Start it first: systemctl start $sn_unit"
+    fi
+    echo "✓ Service $sn_unit is active"
+    echo ""
+    
+    # Check synchronization
+    echo "[2/4] Checking blockchain synchronization..."
+    local height attempts=0 max_attempts=3
+    while [[ $attempts -lt $max_attempts ]]; do
+        if height=$(check_sn_synced "$sn_unit"); then
+            echo "✓ Node is synchronized (height: ${height})"
+            break
+        fi
+        attempts=$((attempts + 1))
+        if [[ $attempts -lt $max_attempts ]]; then
+            echo "  Not synced yet, retrying in 5s... (attempt $attempts/$max_attempts)"
+            sleep 5
+        else
+            die "Node is not synchronized. Wait for sync to complete and try again."
+        fi
+    done
+    echo ""
+    
+    # Check storage ping
+    echo "[3/4] Checking storage server connection..."
+    if check_storage_ping "$sn_unit" "$st_unit"; then
+        echo "✓ Storage server is connected and pinging"
+    else
+        echo "WARNING: No storage server ping detected in recent logs"
+        echo "This might be normal if the node was just started."
+        if is_tty; then
+            if ! confirm_or_default_no "Continue anyway? [y/N]: "; then
+                die "Registration cancelled by user"
+            fi
+        else
+            die "Storage server not detected (non-interactive mode)"
+        fi
+    fi
+    echo ""
+    
+    # Get wallet address if not provided
+    if [[ -z "$wallet_address" ]]; then
+        if ! is_tty; then
+            die "Wallet address required in non-interactive mode"
+        fi
+        echo "[4/4] Wallet address required for registration"
+        echo "This address will receive staking rewards."
+        read_or_fail "Enter your Arqma wallet address: " wallet_address
+    else
+        echo "[4/4] Using provided wallet address: $wallet_address"
+    fi
+    echo ""
+    
+    # Validate wallet address (basic check)
+    if [[ ! "$wallet_address" =~ ^ar[a-zA-Z0-9]{95,}$ ]]; then
+        echo "WARNING: Wallet address format seems invalid (should start with 'ar' and be ~95+ chars)"
+        if is_tty; then
+            if ! confirm_or_default_no "Continue anyway? [y/N]: "; then
+                die "Registration cancelled by user"
+            fi
+        fi
+    fi
+    
+    # Generate registration command
+    local output_file="$HOME/arqma-register-sn${node_num}.txt"
+    echo "Generating registration command..."
+    echo ""
+    
+    if generate_registration_command "$sn_unit" "$wallet_address" "$output_file"; then
+        echo "Registration preparation complete!"
+        return 0
+    else
+        die "Failed to generate registration command"
+    fi
 }
 
 # ---------------- Update mode (binaries only) ----------------
@@ -1884,6 +2156,10 @@ Update binaries:
   $0 --update-binaries --rpc-healthcheck --rollback-on-fail
   $0 --update-binaries --my-endpoint http://your.endpoint/path --rpc-healthcheck --rollback-on-fail
 
+Register service nodes (after sync):
+  $0 --register 1 --wallet arYOUR_WALLET_ADDRESS
+  $0 --register 2 --wallet arYOUR_WALLET_ADDRESS
+
 EOF
 
     echo "Setup complete. Info saved to: $info_file"
@@ -1919,6 +2195,8 @@ BACKUP_DIR_DEFAULT="/root/arqma-backups"
 BACKUP_DIR="$BACKUP_DIR_DEFAULT"
 
 ADD_PAIRS=0
+REGISTER_NODE=0
+REGISTER_WALLET=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -1935,6 +2213,17 @@ while [[ $# -gt 0 ]]; do
         --update-binaries)
             MODE="update"
             shift
+            ;;
+        --register)
+            [[ $# -ge 2 ]] || die "--register requires node number N"
+            REGISTER_NODE="$2"
+            MODE="register"
+            shift 2
+            ;;
+        --wallet)
+            [[ $# -ge 2 ]] || die "--wallet requires wallet address"
+            REGISTER_WALLET="$2"
+            shift 2
             ;;
         --seed-from)
             [[ $# -ge 2 ]] || die "--seed-from requires N"
@@ -2069,6 +2358,11 @@ fi
 
 if [[ "$MODE" == "add" ]]; then
     run_add_mode "$ADD_PAIRS" "$SEED_FROM" "$SEED_TIMEOUT" "$OUTPUT_DIR" "$FORCE_OVERWRITE" "$ENABLE_ARQNET" "$ENABLE_ZMQ" "$ZMQ_BIND_IP" "$BACKUP_DIR"
+    exit 0
+fi
+
+if [[ "$MODE" == "register" ]]; then
+    run_register_mode "$REGISTER_NODE" "$REGISTER_WALLET"
     exit 0
 fi
 

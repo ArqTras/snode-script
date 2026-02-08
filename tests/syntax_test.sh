@@ -89,6 +89,9 @@ REQUIRED_FUNCTIONS=(
     "generate_services_for_new_batch"
     "run_update_mode"
     "run_dashboard"
+    "run_register_mode"
+    "check_sn_synced"
+    "check_storage_ping"
 )
 
 MISSING=()
