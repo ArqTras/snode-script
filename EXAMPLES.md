@@ -146,11 +146,56 @@ sudo journalctl -u sn1.service --since today > sn1_logs_$(date +%Y%m%d).txt
 sudo journalctl -fu sn1.service | grep -i "error\|warning\|failed"
 ```
 
+### Example 9: Registering service nodes
+
+```bash
+# Wait for node to synchronize first
+sudo journalctl -fu sn1.service
+# Wait until you see: "Synced XXX/XXX"
+
+# Check sync status and dashboard
+sudo ./arqma-node-setup.sh
+
+# Register node 1 (interactive - will prompt for wallet)
+sudo ./arqma-node-setup.sh --register 1
+
+# OR: Register with wallet address provided
+sudo ./arqma-node-setup.sh --register 1 --wallet arYOUR_WALLET_ADDRESS_HERE
+
+# Script will:
+# 1. Check if sn1.service is active
+# 2. Verify blockchain synchronization
+# 3. Check storage server connection
+# 4. Generate prepare_registration command
+# 5. Save register_service_node to ~/arqma-register-sn1.txt
+
+# View registration command
+cat ~/arqma-register-sn1.txt
+
+# Copy the register_service_node command
+# Open your Arqma wallet CLI:
+./arqma-wallet-cli --wallet-file your-wallet
+
+# Paste and execute the registration command
+# Wait for transaction confirmation
+
+# Verify registration
+curl -s http://127.0.0.1:10002/json_rpc \
+  -d '{"jsonrpc":"2.0","id":"0","method":"get_service_node_key"}' \
+  -H 'Content-Type: application/json' | jq
+
+# Register additional nodes (if you have multiple)
+sudo ./arqma-node-setup.sh --register 2 --wallet arYOUR_WALLET_ADDRESS
+sudo ./arqma-node-setup.sh --register 3 --wallet arYOUR_WALLET_ADDRESS
+
+# Note: Each registration requires separate 20,000 ARQMA stake
+```
+
 ---
 
 ## Expanding Installation
 
-### Example 9: Adding 1 node pair to existing installation
+### Example 10: Adding 1 node pair to existing installation
 
 ```bash
 # First check current configuration
@@ -173,7 +218,7 @@ sudo ./arqma-node-setup.sh --add-pairs 1 --seed-from 1
 # 4. Will start new sn3 and st3
 ```
 
-### Example 10: Bulk adding nodes with custom seed
+### Example 11: Bulk adding nodes with custom seed
 
 ```bash
 # Add 5 new pairs, seed from sn2 (if sn1 is busy)
@@ -186,7 +231,7 @@ sudo ./arqma-node-setup.sh \
 # Default 180s may not be enough on some systems
 ```
 
-### Example 11: Verification before and after adding nodes
+### Example 12: Verification before and after adding nodes
 
 ```bash
 # PRE-CHECK: Check resources
@@ -211,7 +256,7 @@ sudo journalctl -u sn4.service -n 50
 
 ## Backup and Restore
 
-### Example 12: Backup all keys
+### Example 13: Backup all keys
 
 ```bash
 #!/bin/bash
@@ -267,7 +312,7 @@ echo "IMPORTANT: Store this backup in a secure location!"
 # gpg -c "${BACKUP_DIR}.tar.gz"
 ```
 
-### Example 13: Restore keys from backup
+### Example 14: Restore keys from backup
 
 ```bash
 #!/bin/bash
@@ -364,7 +409,7 @@ echo "Restore completed!"
 
 ## Troubleshooting
 
-### Example 14: Diagnosing node that won't start
+### Example 15: Diagnosing node that won't start
 
 ```bash
 #!/bin/bash
@@ -440,7 +485,7 @@ else
 fi
 ```
 
-### Example 15: Cleanup and reinstall single node
+### Example 16: Cleanup and reinstall single node
 
 ```bash
 #!/bin/bash
@@ -526,7 +571,7 @@ echo "Monitor logs: sudo journalctl -fu $SN_SERVICE"
 
 ## Additional Tools
 
-### Example 16: Monitoring all nodes (dashboard)
+### Example 17: Monitoring all nodes (dashboard)
 
 ```bash
 #!/bin/bash
