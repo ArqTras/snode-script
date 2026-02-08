@@ -78,7 +78,7 @@ BLOCKCHAIN_URL_DEFAULT="https://downloads.arqma.com/RAW/blockchain.raw"
 
 # Core binaries release (arqmad + arqma-blockchain-import)
 GITHUB_RELEASE_DEFAULT="https://github.com/arqma/arqma/releases/latest/download/build-depends-x86_64-linux.tar.gz"
-STORAGE_RELEASE_DEFAULT="https://github.com/arqma/arqma-storage-server/releases/download/v1.1.0/arqma-storage-linux-ubuntu-22.04-x86_64.tar.gz"
+STORAGE_RELEASE_DEFAULT="https://github.com/arqma/arqma-storage-server/releases/latest/download/arqma-storage-linux-ubuntu-22.04-x86_64.tar.gz"
 
 INFO_FILE_DEFAULT="$HOME/ARQMA-setup.info"
 
